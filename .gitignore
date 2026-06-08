@@ -1,0 +1,42 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Data files (too large for GitHub)
+data/raw/
+data/processed/
+*.wav
+*.mp3
+*.flac
+*.stem
+
+# Trained models (too large for GitHub)
+models/*.h5
+models/*.pkl
+models/*.pt
+models/*.pth
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Environment variables
+.env
+
+# VS Code settings
+.vscode/
+
+# Test files
+test_env.py
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Streamlit cache
+.streamlit/
