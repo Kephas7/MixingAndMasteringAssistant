@@ -9,6 +9,7 @@ from feature_extraction import (
 from eq_model import analyze_frequency_bands, get_eq_recommendations, plot_frequency_spectrum, get_eq_explanation
 from compression_model import analyze_dynamics, get_compression_recommendations, plot_dynamic_range, get_compression_explanation
 from mastering_model import analyze_loudness, get_mastering_recommendations, get_mastering_explanation, plot_loudness_vs_targets
+from recommender import generate_mix_report
 
 st.set_page_config(
     page_title="Music Mixing & Mastering Assistant",
@@ -29,19 +30,91 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     st.audio(uploaded_file)
 
-    with st.spinner("Analyzing your track..."):
-        y, sr = load_audio(uploaded_file)
-        info = get_basic_info(y, sr)
-        spectral = get_spectral_features(y, sr)
+    with st.spinner("Analyzing your track — this may take a moment..."):
+        y, sr         = load_audio(uploaded_file)
+        info          = get_basic_info(y, sr)
+        spectral      = get_spectral_features(y, sr)
+        band_energies = analyze_frequency_bands(y, sr)
+        eq_recs       = get_eq_recommendations(band_energies)
+        dynamics      = analyze_dynamics(y, sr)
+        comp_recs     = get_compression_recommendations(dynamics)
+        loudness      = analyze_loudness(y, sr)
+        master_recs   = get_mastering_recommendations(loudness)
+        mix_report    = generate_mix_report(eq_recs, comp_recs, master_recs)
 
+    # -----------------------------------------------------------------------
+    # Mix Assessment — shown first so producers get the TL;DR immediately
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.subheader("🏆 Mix Assessment")
+
+    score = mix_report["score"]
+    grade = mix_report["grade"]
+    label = mix_report["label"]
+    color = "#6BCB77" if score >= 80 else ("#FFD93D" if score >= 60 else "#FF6B6B")
+
+    col_score, col_detail = st.columns([1, 3])
+
+    with col_score:
+        st.markdown(
+            f"""
+            <div style="text-align:center; padding:24px 16px; border-radius:12px;
+                        background:{color}22; border:2px solid {color};">
+                <div style="font-size:60px; font-weight:bold; color:{color}; line-height:1;">
+                    {grade}
+                </div>
+                <div style="font-size:30px; font-weight:bold; color:{color};">
+                    {score}/100
+                </div>
+                <div style="font-size:13px; color:#aaa; margin-top:4px;">
+                    {label}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_detail:
+        st.markdown(f"**{mix_report['summary']}**")
+        st.markdown("")
+
+        if mix_report["priorities"]:
+            st.markdown("**Top priorities:**")
+            for p in mix_report["priorities"]:
+                badge = "#FF6B6B" if p["priority"] >= 4 else ("#FFD93D" if p["priority"] >= 3 else "#4D96FF")
+                st.markdown(
+                    f"""
+                    <div style="padding:10px 14px; margin:6px 0; border-radius:8px;
+                                border-left:4px solid {badge}; background:{badge}11;">
+                        <span style="font-weight:bold; color:{badge};">#{p['rank']} {p['category']}</span>
+                        &nbsp;&nbsp;{p['action']}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.markdown("")
+            with st.expander("Why these priorities? (details)"):
+                for p in mix_report["priorities"]:
+                    st.markdown(f"**#{p['rank']} {p['category']} — {p['action']}**")
+                    st.write(p["why"])
+                    st.markdown("---")
+
+    if mix_report["strengths"]:
+        with st.expander("✅ What's already working well"):
+            for s in mix_report["strengths"]:
+                st.success(f"✅ {s}")
+
+    # -----------------------------------------------------------------------
+    # Track Analysis
+    # -----------------------------------------------------------------------
     st.divider()
     st.subheader("📊 Track Analysis")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Duration", f"{info['Duration (s)']}s")
-    col2.metric("Tempo", f"{info['Tempo (BPM)']} BPM")
-    col3.metric("Sample Rate", f"{info['Sample Rate (Hz)']} Hz")
-    col4.metric("RMS Energy", str(info['RMS Energy']))
+    col1.metric("Duration",     f"{info['Duration (s)']}s")
+    col2.metric("Tempo",        f"{info['Tempo (BPM)']} BPM")
+    col3.metric("Sample Rate",  f"{info['Sample Rate (Hz)']} Hz")
+    col4.metric("RMS Energy",   str(info['RMS Energy']))
 
     st.divider()
     st.subheader("🌊 Waveform")
@@ -53,17 +126,17 @@ if uploaded_file is not None:
 
     st.divider()
     st.subheader("📡 Spectral Features")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Centroid", f"{spectral['Spectral Centroid (Hz)']} Hz")
-    col2.metric("Bandwidth", f"{spectral['Spectral Bandwidth (Hz)']} Hz")
-    col3.metric("Rolloff", f"{spectral['Spectral Rolloff (Hz)']} Hz")
 
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Centroid",  f"{spectral['Spectral Centroid (Hz)']} Hz")
+    col2.metric("Bandwidth", f"{spectral['Spectral Bandwidth (Hz)']} Hz")
+    col3.metric("Rolloff",   f"{spectral['Spectral Rolloff (Hz)']} Hz")
+
+    # -----------------------------------------------------------------------
+    # EQ Analysis
+    # -----------------------------------------------------------------------
     st.divider()
     st.subheader("🎛️ EQ Analysis")
-
-    with st.spinner("Running EQ analysis..."):
-        band_energies = analyze_frequency_bands(y, sr)
-        recommendations = get_eq_recommendations(band_energies)
 
     col1, col2 = st.columns(2)
 
@@ -74,7 +147,7 @@ if uploaded_file is not None:
 
     with col2:
         st.markdown("**EQ Recommendations**")
-        for band, rec in recommendations.items():
+        for band, rec in eq_recs.items():
             if "Boost" in rec:
                 st.success(f"🔺 {band}: {rec}")
             elif "Cut" in rec:
@@ -82,7 +155,7 @@ if uploaded_file is not None:
             else:
                 st.info(f"✅ {band}: {rec}")
 
-    actionable_bands = {b: r for b, r in recommendations.items() if r != "Neutral"}
+    actionable_bands = {b: r for b, r in eq_recs.items() if r != "Neutral"}
     if actionable_bands:
         st.markdown("**What this means for your mix:**")
         for band, rec in actionable_bands.items():
@@ -94,32 +167,31 @@ if uploaded_file is not None:
     st.subheader("📈 Frequency Spectrum")
     st.pyplot(plot_frequency_spectrum(y, sr))
 
+    # -----------------------------------------------------------------------
+    # Compression Analysis
+    # -----------------------------------------------------------------------
     st.divider()
     st.subheader("🔊 Compression Analysis")
 
-    with st.spinner("Analyzing dynamics..."):
-        dynamics = analyze_dynamics(y, sr)
-        compression_recs = get_compression_recommendations(dynamics)
-
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Dynamic Range", compression_recs["dynamic_range"])
-    col2.metric("Crest Factor", compression_recs["crest_factor"])
-    col3.metric("Attack Time", compression_recs["attack_time"])
-    col4.metric("Release Time", compression_recs["release_time"])
+    col1.metric("Dynamic Range", comp_recs["dynamic_range"])
+    col2.metric("Crest Factor",  comp_recs["crest_factor"])
+    col3.metric("Attack Time",   comp_recs["attack_time"])
+    col4.metric("Release Time",  comp_recs["release_time"])
 
     st.divider()
 
     col1, col2 = st.columns(2)
 
     with col1:
-        assessment = compression_recs["compression_assessment"]
+        assessment = comp_recs["compression_assessment"]
         if "Over-compressed" in assessment:
             st.error(f"⚠️ {assessment}")
         elif "Needs compression" in assessment:
             st.warning(f"🔶 {assessment}")
         else:
             st.success(f"✅ {assessment}")
-        st.metric("Recommended Ratio", compression_recs["compression_ratio"])
+        st.metric("Recommended Ratio", comp_recs["compression_ratio"])
         st.markdown(get_compression_explanation(assessment))
 
     with col2:
@@ -132,29 +204,27 @@ if uploaded_file is not None:
     st.subheader("📉 Dynamic Range Over Time")
     st.pyplot(plot_dynamic_range(y, sr))
 
+    # -----------------------------------------------------------------------
+    # Mastering & Loudness
+    # -----------------------------------------------------------------------
     st.divider()
     st.subheader("🎚️ Mastering & Loudness")
 
-    with st.spinner("Analyzing loudness..."):
-        loudness = analyze_loudness(y, sr)
-        mastering_recs = get_mastering_recommendations(loudness)
-
     col1, col2, col3 = st.columns(3)
-    col1.metric("Integrated Loudness", f"{loudness['integrated_lufs']} LUFS")
-    col2.metric("True Peak", f"{loudness['true_peak_dbtp']} dBTP")
+    col1.metric("Integrated Loudness",  f"{loudness['integrated_lufs']} LUFS")
+    col2.metric("True Peak",            f"{loudness['true_peak_dbtp']} dBTP")
     col3.metric("Loudness Range (LRA)", f"{loudness['lra']} LU")
 
     st.divider()
 
-    # Loudness assessment
-    loudness_status = mastering_recs["loudness_status"]
+    loudness_status = master_recs["loudness_status"]
     if loudness_status == "too_loud":
-        st.error(f"⚠️ {mastering_recs['loudness_assessment']}")
+        st.error(f"⚠️ {master_recs['loudness_assessment']}")
     elif loudness_status == "too_quiet":
-        st.warning(f"🔇 {mastering_recs['loudness_assessment']}")
+        st.warning(f"🔇 {master_recs['loudness_assessment']}")
     else:
-        st.success(f"✅ {mastering_recs['loudness_assessment']}")
-    st.caption(f"Suggested gain adjustment: {mastering_recs['gain_adjustment']}")
+        st.success(f"✅ {master_recs['loudness_assessment']}")
+    st.caption(f"Suggested gain adjustment: {master_recs['gain_adjustment']}")
     st.markdown(get_mastering_explanation(loudness_status))
 
     st.divider()
@@ -163,20 +233,20 @@ if uploaded_file is not None:
 
     with col1:
         st.markdown("**True Peak**")
-        tp_status = mastering_recs["true_peak_status"]
+        tp_status = master_recs["true_peak_status"]
         if tp_status == "true_peak_exceeded":
-            st.error(f"⚠️ {mastering_recs['true_peak_assessment']}")
+            st.error(f"⚠️ {master_recs['true_peak_assessment']}")
         else:
-            st.success(f"✅ {mastering_recs['true_peak_assessment']}")
+            st.success(f"✅ {master_recs['true_peak_assessment']}")
         st.markdown(get_mastering_explanation(tp_status))
 
     with col2:
         st.markdown("**Loudness Range**")
-        lra_status = mastering_recs["lra_status"]
+        lra_status = master_recs["lra_status"]
         if lra_status == "lra_good":
-            st.success(f"✅ {mastering_recs['lra_assessment']}")
+            st.success(f"✅ {master_recs['lra_assessment']}")
         else:
-            st.warning(f"🔶 {mastering_recs['lra_assessment']}")
+            st.warning(f"🔶 {master_recs['lra_assessment']}")
         st.markdown(get_mastering_explanation(lra_status))
 
     st.subheader("📊 Loudness vs. Streaming Targets")
@@ -191,7 +261,3 @@ else:
     with col3:
         st.info("📊 **Mastering**\nLoudness normalization and final polish")
     st.caption("Supported formats: WAV, MP3, FLAC")
-
-
-
-    
