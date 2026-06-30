@@ -135,67 +135,39 @@ EQ_EXPLANATIONS = {
 def analyze_frequency_bands(y: np.ndarray, sr: int) -> Dict[str, float]:
     """
     Analyze energy levels across 7 frequency bands using FFT.
-    
-    Uses Short-Time Fourier Transform (STFT) to compute the magnitude spectrum,
-    then extracts the average energy within each frequency band. Energy values
-    are normalized to 0-1 scale for comparison with ideal reference levels.
-    
+
+    Computes STFT magnitude (linear amplitude) for each band and normalizes
+    the result to a 0–1 scale relative to the loudest band. Working in linear
+    amplitude space (not dB) avoids sign-inversion issues when normalizing.
+
     Parameters:
     -----------
     y : np.ndarray
         Audio signal (time-domain samples)
     sr : int
         Sample rate (samples per second)
-    
+
     Returns:
     --------
     Dict[str, float]
-        Dictionary mapping frequency band names to normalized energy values (0-1).
-        Keys correspond to FREQUENCY_BANDS keys.
-        
-    Example:
-    --------
-    >>> y, sr = librosa.load('audio.wav')
-    >>> energies = analyze_frequency_bands(y, sr)
-    >>> print(energies['Bass'])  # Energy in bass band
-    0.87
+        Band names mapped to normalized amplitude values (0–1).
     """
-    # Compute STFT (magnitude spectrum only, discard phase)
+    # STFT magnitude — linear amplitude, all values ≥ 0
     S = np.abs(librosa.stft(y))
-    
-    # Convert magnitude squared to dB scale for perceptual accuracy
-    # ref=np.max normalizes to the maximum value
-    S_db = librosa.power_to_db(S**2, ref=np.max)
-    
-    # Get frequency bins corresponding to STFT output
-    # n_fft = (S.shape[0] - 1) * 2
     freqs = librosa.fft_frequencies(sr=sr, n_fft=S.shape[0] * 2 - 2)
-    
+
     band_energies = {}
-    
-    # Extract energy for each defined frequency band
     for band_name, (low_freq, high_freq) in FREQUENCY_BANDS.items():
-        # Create boolean mask for frequencies within this band
         mask = (freqs >= low_freq) & (freqs < high_freq)
-        
-        if np.any(mask):
-            # Calculate mean dB magnitude across time and frequency within band
-            # Shape: (n_fft/2+1, n_frames), we average across both dimensions
-            band_energy = np.mean(S_db[mask, :])
-            band_energies[band_name] = band_energy
-        else:
-            # No frequencies in this band (shouldn't happen with standard ranges)
-            band_energies[band_name] = 0.0
-    
-    # Normalize energies to 0-1 range
-    # Find maximum energy across all bands
-    max_energy = max(band_energies.values()) if band_energies else 1
+        band_energies[band_name] = float(np.mean(S[mask, :])) if np.any(mask) else 0.0
+
+    # Normalize to 0–1 relative to the dominant band
+    max_energy = max(band_energies.values()) if band_energies else 1.0
     if max_energy > 0:
         band_energies = {k: v / max_energy for k, v in band_energies.items()}
     else:
-        # Handle edge case of silent audio
         band_energies = {k: 0.0 for k in band_energies}
-    
+
     return band_energies
 
 
@@ -244,6 +216,9 @@ def get_eq_recommendations(band_energies: Dict[str, float]) -> Dict[str, str]:
         ratio = max(ratio, 0.01)
         db_diff = 20 * np.log10(ratio)
         
+        # Cap to a practical EQ range — no real EQ adjustment exceeds ±12 dB
+        db_diff = max(-12.0, min(12.0, db_diff))
+
         # Generate recommendation based on dB difference threshold
         # Positive db_diff means energy is above ideal -> should cut
         # Negative db_diff means energy is below ideal -> should boost
