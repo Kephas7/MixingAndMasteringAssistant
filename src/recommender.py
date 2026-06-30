@@ -241,15 +241,16 @@ def generate_mix_report(
 
     score = max(0, min(100, score))
 
-    n_issues = len(issues)
-    if n_issues == 0:
-        summary = "Your mix is in excellent shape across EQ, compression, and loudness."
-    elif n_issues <= 2:
-        summary = f"Solid mix with {n_issues} area{'s' if n_issues > 1 else ''} to polish before release."
-    elif n_issues <= 4:
+    if score >= 90:
+        summary = "Your mix is in excellent shape — ready for release."
+    elif score >= 80:
+        summary = "Solid mix with a few areas to polish before release."
+    elif score >= 70:
         summary = "Good foundation — focus on the priorities below to get release-ready."
+    elif score >= 60:
+        summary = "Several areas need attention. Work through the priorities below."
     else:
-        summary = "Several areas need attention. Work through the priorities below one at a time."
+        summary = "Multiple significant issues detected. Work through the priorities below one at a time."
 
     return {
         "score":      score,
