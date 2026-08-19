@@ -171,27 +171,52 @@ def analyze_frequency_bands(y: np.ndarray, sr: int) -> Dict[str, float]:
     return band_energies
 
 
-def get_eq_recommendations(band_energies: Dict[str, float]) -> Dict[str, str]:
+def get_ideal_energy(
+    y: np.ndarray,
+    sr: int,
+    model_path: str = "models/eq_model.joblib",
+) -> Dict[str, float]:
+    """
+    Return ideal band energy targets for the given audio.
+
+    Uses the trained ML model when available; falls back to the hardcoded
+    IDEAL_ENERGY reference values if the model file has not been generated yet.
+    """
+    try:
+        from train_eq_model import predict_ideal_eq
+        return predict_ideal_eq(y, sr, model_path=model_path)
+    except Exception:
+        pass
+    return dict(IDEAL_ENERGY)
+
+
+def get_eq_recommendations(
+    band_energies: Dict[str, float],
+    ideal_energy: Dict[str, float] = None,
+) -> Dict[str, str]:
     """
     Compare band energies against ideal reference mix balance and provide EQ recommendations.
-    
+
     Calculates the dB difference between actual and ideal energy for each band,
     then provides EQ adjustment recommendations (Boost, Cut, or Neutral) based on
     threshold values. Positive dB values indicate the band is above ideal (should cut),
     negative values indicate the band is below ideal (should boost).
-    
+
     Parameters:
     -----------
     band_energies : Dict[str, float]
         Energy values for each band from analyze_frequency_bands().
         Expected to be normalized 0-1 values.
-    
+    ideal_energy : Dict[str, float], optional
+        Per-band ideal targets (0-1). Defaults to IDEAL_ENERGY if not provided.
+        Pass the output of get_ideal_energy(y, sr) for ML-derived targets.
+
     Returns:
     --------
     Dict[str, str]
         Dictionary mapping band names to recommendation strings.
         Format examples: "Boost: 3.5 dB", "Cut: 2.1 dB", "Neutral".
-        
+
     Example:
     --------
     >>> energies = {'Bass': 0.95, 'Mid': 0.8, ...}
@@ -199,11 +224,14 @@ def get_eq_recommendations(band_energies: Dict[str, float]) -> Dict[str, str]:
     >>> print(recs['Bass'])
     'Cut: 1.4 dB'
     """
+    if ideal_energy is None:
+        ideal_energy = IDEAL_ENERGY
+
     recommendations = {}
-    
+
     for band_name, energy in band_energies.items():
         # Get ideal energy for this band
-        ideal = IDEAL_ENERGY.get(band_name, 1.0)
+        ideal = ideal_energy.get(band_name, 1.0)
         
         # Calculate ratio between actual and ideal energy
         if ideal > 0:
