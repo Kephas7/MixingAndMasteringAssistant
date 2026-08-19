@@ -20,6 +20,11 @@ models/*.h5
 models/*.pkl
 models/*.pt
 models/*.pth
+models/*.joblib
+
+# Generated evaluation artifacts
+results/*.png
+results/*.txt
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
