@@ -4,9 +4,8 @@ Analyzes dynamic range of audio signals and provides compression recommendations
 """
 
 import numpy as np
-import librosa
 import matplotlib.pyplot as plt
-from typing import Dict, Tuple
+from typing import Dict
 
 # Compression ratio presets (used for recommendations)
 COMPRESSION_RATIOS = [1.5, 2.0, 4.0, 8.0, 16.0]
@@ -168,96 +167,122 @@ def analyze_dynamics(y: np.ndarray, sr: int) -> Dict[str, float]:
     return dynamics
 
 
-def get_compression_recommendations(dynamics: Dict[str, float]) -> Dict[str, str]:
+def get_compression_params(
+    y: np.ndarray,
+    sr: int,
+    model_path: str = "models/compression_model.joblib",
+) -> Dict[str, float]:
+    """
+    Predict compression parameters using the trained ML model.
+
+    Falls back to analytically derived values (from dynamics) if the model
+    file has not been generated yet.
+
+    Returns dict with: ratio, threshold_db, attack_ms, release_ms
+    """
+    try:
+        from train_compression_model import predict_compression_params
+        return predict_compression_params(y, sr, model_path=model_path)
+    except Exception:
+        pass
+    # Fallback: derive analytically from signal dynamics
+    dynamics = analyze_dynamics(y, sr)
+    crest = dynamics["crest_factor_db"]
+    rms_db = dynamics["rms_db"]
+    onset_rate = 2.0  # neutral default without librosa onset detection
+    ratio        = float(np.clip(1.0 + max(0.0, crest - 4.0) * 0.55, 1.0, 16.0))
+    threshold_db = float(np.clip(rms_db + 4.0, -40.0, -6.0))
+    attack_ms    = float(np.clip(80.0 / (1.0 + onset_rate * 0.9), 1.0, 100.0))
+    release_ms   = float(np.clip(attack_ms * 4.0, 50.0, 1000.0))
+    return {"ratio": ratio, "threshold_db": threshold_db,
+            "attack_ms": attack_ms, "release_ms": release_ms}
+
+
+def get_compression_recommendations(
+    dynamics: Dict[str, float],
+    ml_params: Dict[str, float] = None,
+) -> Dict[str, str]:
     """
     Generate compression recommendations based on dynamic range analysis.
-    
-    Evaluates crest factor and dynamic range metrics to recommend appropriate
-    compression settings including ratio, attack/release times, and overall
-    compression assessment (over-compressed, well-balanced, or needs compression).
-    
+
+    When ml_params is provided (output of get_compression_params()), the ML
+    predictions are used for ratio, attack, and release; assessment is still
+    derived from measured dynamics so it remains accurate. Without ml_params
+    the original rule-based logic is used as a fallback.
+
     Parameters:
     -----------
-    dynamics : Dict[str, float]
-        Dynamic metrics from analyze_dynamics().
-    
+    dynamics  : Dict[str, float]  — from analyze_dynamics()
+    ml_params : Dict[str, float]  — optional, from get_compression_params()
+
     Returns:
     --------
-    Dict[str, str]
-        Dictionary containing:
-        - 'compression_ratio': Recommended ratio (e.g., "2:1", "4:1")
-        - 'attack_time': Recommended attack in milliseconds (e.g., "10 ms (fast)")
-        - 'release_time': Recommended release in milliseconds (e.g., "200 ms (medium)")
-        - 'compression_assessment': Overall assessment of current compression state
-        
-    Example:
-    --------
-    >>> dynamics = analyze_dynamics(y, sr)
-    >>> recs = get_compression_recommendations(dynamics)
-    >>> print(recs['compression_ratio'])
-    '4:1'
-    >>> print(recs['compression_assessment'])
-    'Needs compression - high peaks detected'
+    Dict[str, str] with keys: compression_ratio, attack_time, release_time,
+    compression_assessment, crest_factor, dynamic_range
     """
-    recommendations = {}
-    
-    crest_factor = dynamics["crest_factor_db"]
+    crest_factor  = dynamics["crest_factor_db"]
     dynamic_range = dynamics["dynamic_range"]
-    
-    # Determine compression ratio based on crest factor
-    # Higher crest factor means more aggressive compression needed
-    if crest_factor < CREST_FACTOR_LOW:
-        # Very low crest factor: minimal compression needed
-        compression_ratio = 1.5
-        assessment = "Well-balanced - minimal compression needed"
-    elif crest_factor < CREST_FACTOR_MEDIUM:
-        # Low to medium: light to moderate compression
-        compression_ratio = 2.0
-        assessment = "Well-balanced - light compression recommended"
-    elif crest_factor < CREST_FACTOR_HIGH:
-        # Medium to high: moderate to aggressive compression
-        compression_ratio = 4.0
-        assessment = "Needs compression - moderate peaks detected"
-    else:
-        # High crest factor: aggressive compression needed
-        compression_ratio = 8.0
-        assessment = "Needs compression - high peaks detected"
-    
-    # Over-compression detection: if dynamic range is very low,
-    # the track is already heavily compressed
+
+    # ── Assessment (always rule-based — ML cannot observe over-compression) ───
     if dynamic_range < LOW_DYNAMIC_RANGE:
         assessment = "Over-compressed - dynamics are limited"
-        compression_ratio = 1.5  # No additional compression needed
-    
-    # Attack time determination based on dynamic range variation
-    # High loudness range variation suggests dynamic content needing fast attack
-    loudness_range = dynamics["loudness_range"]
-    if loudness_range > 8:  # High variation
-        attack_time = "fast"
-    elif loudness_range > 4:
-        attack_time = "medium"
+    elif crest_factor < CREST_FACTOR_LOW:
+        assessment = "Well-balanced - minimal compression needed"
+    elif crest_factor < CREST_FACTOR_MEDIUM:
+        assessment = "Well-balanced - light compression recommended"
+    elif crest_factor < CREST_FACTOR_HIGH:
+        assessment = "Needs compression - moderate peaks detected"
     else:
-        attack_time = "slow"
-    
-    # Release time determination based on type of content
-    # Music with sustained notes benefits from slower release
-    # Percussive content benefits from faster release
-    if dynamic_range > MEDIUM_DYNAMIC_RANGE:
-        release_time = "slow"  # Preserve sustain on dynamic content
+        assessment = "Needs compression - high peaks detected"
+
+    if ml_params is not None:
+        # ── ML-derived ratio / attack / release ──────────────────────────────
+        ratio      = ml_params["ratio"]
+        attack_ms  = ml_params["attack_ms"]
+        release_ms = ml_params["release_ms"]
+
+        # Override assessment label for over-compressed check
+        if dynamic_range < LOW_DYNAMIC_RANGE:
+            ratio = 1.5  # Don't recommend further compression
+
+        # Human-readable labels
+        attack_label  = "fast" if attack_ms < 20 else ("medium" if attack_ms < 60 else "slow")
+        release_label = "fast" if release_ms < 100 else ("medium" if release_ms < 350 else "slow")
+
+        ratio_str   = f"{ratio:.1f}:1"
+        attack_str  = f"{attack_ms:.0f} ms ({attack_label})"
+        release_str = f"{release_ms:.0f} ms ({release_label})"
+
     else:
-        release_time = "medium"
-    
-    # Format recommendation strings
-    recommendations["compression_ratio"] = f"{compression_ratio}:1"
-    recommendations["attack_time"] = f"{ATTACK_TIMES[attack_time]} ms ({attack_time})"
-    recommendations["release_time"] = f"{RELEASE_TIMES[release_time]} ms ({release_time})"
-    recommendations["compression_assessment"] = assessment
-    
-    # Add additional metrics for user reference
-    recommendations["crest_factor"] = f"{crest_factor:.1f} dB"
-    recommendations["dynamic_range"] = f"{dynamic_range:.1f} dB"
-    
-    return recommendations
+        # ── Fallback: original rule-based logic ───────────────────────────────
+        loudness_range = dynamics["loudness_range"]
+
+        if crest_factor < CREST_FACTOR_LOW:
+            compression_ratio = 1.5
+        elif crest_factor < CREST_FACTOR_MEDIUM:
+            compression_ratio = 2.0
+        elif crest_factor < CREST_FACTOR_HIGH:
+            compression_ratio = 4.0
+        else:
+            compression_ratio = 8.0
+        if dynamic_range < LOW_DYNAMIC_RANGE:
+            compression_ratio = 1.5
+
+        attack_key  = "fast" if loudness_range > 8 else ("medium" if loudness_range > 4 else "slow")
+        release_key = "slow" if dynamic_range > MEDIUM_DYNAMIC_RANGE else "medium"
+
+        ratio_str   = f"{compression_ratio}:1"
+        attack_str  = f"{ATTACK_TIMES[attack_key]} ms ({attack_key})"
+        release_str = f"{RELEASE_TIMES[release_key]} ms ({release_key})"
+
+    return {
+        "compression_ratio":    ratio_str,
+        "attack_time":          attack_str,
+        "release_time":         release_str,
+        "compression_assessment": assessment,
+        "crest_factor":         f"{crest_factor:.1f} dB",
+        "dynamic_range":        f"{dynamic_range:.1f} dB",
+    }
 
 
 def plot_dynamic_range(y: np.ndarray, sr: int) -> plt.Figure:
